@@ -1,0 +1,2 @@
+type,seq,timestamp,waveform_wander,wander_average,waveform_wander_threshold,someone_status,waveform_jitter,jitter_midean,waveform_jitter_threshold,move_status
+RADAR_DADA,101,test,0.080000,0.030000,0.200000,1,0.920000,0.210000,1.000000,1

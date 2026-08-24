@@ -1,0 +1,19 @@
+.venv/
+.build/
+__pycache__/
+*.py[cod]
+
+# Upstream dependency; setup.ps1 clones it and applies our patch.
+esp-csi/
+
+# Device-specific or generated data. Flash backups can contain Wi-Fi NVS.
+backup/
+firmware/
+tools/
+**/log/
+**/data/
+*.log
+
+# Local editor/OS files
+.DS_Store
+Thumbs.db

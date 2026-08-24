@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WiFi Motion Studio</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<main id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">⌁</div>
+      <div>
+        <h1>WiFi Motion Studio</h1>
+        <p>ESP32 CSI · 推定3Dモーション</p>
+      </div>
+    </div>
+    <div class="live-chip" id="liveChip"><span></span><strong id="liveText">接続確認中</strong></div>
+  </header>
+
+  <section class="workspace">
+    <aside class="panel metrics" aria-label="検知状態">
+      <p class="eyebrow">DETECTION</p>
+      <div class="metric">
+        <span>状態</span>
+        <strong id="activityValue">データ待機</strong>
+      </div>
+      <div class="metric">
+        <span>動きの強さ</span>
+        <strong><b id="motionValue">0</b><small>%</small></strong>
+      </div>
+      <div class="meter"><i id="motionMeter"></i></div>
+      <div class="metric">
+        <span>推定信頼度</span>
+        <strong><b id="confidenceValue">0</b><small>%</small></strong>
+      </div>
+      <div class="metric position-readout">
+        <span>演出上の位置</span>
+        <strong id="positionValue">X 0.00 · Z 0.00</strong>
+      </div>
+      <canvas id="sparkline" aria-label="直近の動き強度グラフ"></canvas>
+    </aside>
+
+    <section class="scene-wrap" aria-label="推定3D人物モーション">
+      <canvas id="scene" aria-label="ESP32 CSI値に応じて動く17点人体骨格の3D表示"></canvas>
+      <div class="scene-label">
+        <span>ESTIMATED TRACK</span>
+        <strong id="sceneStatus">ESP32データ待機中</strong>
+      </div>
+      <div class="scene-help">ドラッグ：視点回転 · ホイール：ズーム</div>
+      <button id="resetCamera" type="button">視点を戻す</button>
+    </section>
+
+    <aside class="panel signal" aria-label="Wi-Fi信号状態">
+      <p class="eyebrow">WIFI SIGNAL</p>
+      <div class="signal-row"><span>RSSI</span><strong id="rssiValue">-- dBm</strong></div>
+      <div class="signal-row"><span>CSI jitter</span><strong id="jitterValue">0.000</strong></div>
+      <div class="signal-row"><span>しきい値</span><strong id="thresholdValue">0.000</strong></div>
+      <div class="signal-row"><span>サンプル</span><strong id="sequenceValue">--</strong></div>
+      <div class="presence" id="presenceBox">
+        <span id="presenceDot"></span>
+        <strong id="presenceValue">待機中</strong>
+      </div>
+      <p class="notice">位置と姿勢は単一ESP32の動体値から生成した推定演出です。</p>
+    </aside>
+  </section>
+
+  <footer>
+    <span><i class="legend-dot measured"></i>ESP32実測値</span>
+    <span><i class="legend-dot inferred"></i>推定アニメーション</span>
+    <span id="sampleAge">最新データ：--</span>
+  </footer>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

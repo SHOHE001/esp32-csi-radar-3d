@@ -1,0 +1,357 @@
+warning: in the working copy of 'examples/esp-radar/console_test/components/commands/src/wifi_cmd.c', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'examples/esp-radar/console_test/main/app_main.c', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'examples/esp-radar/console_test/tools/esp_csi_tool.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'examples/esp-radar/console_test/tools/esp_csi_tool_gui.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'examples/esp-radar/console_test/tools/esp_csi_tool_gui.ui', LF will be replaced by CRLF the next time Git touches it
+diff --git a/examples/esp-radar/console_test/components/commands/src/wifi_cmd.c b/examples/esp-radar/console_test/components/commands/src/wifi_cmd.c
+index effd710..6beb62d 100644
+--- a/examples/esp-radar/console_test/components/commands/src/wifi_cmd.c
++++ b/examples/esp-radar/console_test/components/commands/src/wifi_cmd.c
+@@ -314,6 +314,10 @@ static int wifi_config_func(int argc, char **argv)
+ 
+     if (wifi_config_args.ssid->count) {
+         strcpy((char *)wifi_config.sta.ssid, wifi_config_args.ssid->sval[0]);
++        // esp_radar_wifi_init starts on a fixed radar channel.  Do not carry
++        // that channel into a router connection; channel 0 scans all channels.
++        wifi_config.sta.channel = 0;
++        wifi_config.sta.bssid_set = false;
+     }
+ 
+     if (wifi_config_args.password->count) {
+@@ -373,6 +377,8 @@ static int wifi_config_func(int argc, char **argv)
+             return ESP_ERR_INVALID_ARG;
+         }
+ 
++        country.max_tx_power = 20;
++        country.policy = WIFI_COUNTRY_POLICY_MANUAL;
+         ret = esp_wifi_set_country(&country);
+     }
+ 
+diff --git a/examples/esp-radar/console_test/main/app_main.c b/examples/esp-radar/console_test/main/app_main.c
+index e97733e..214a004 100644
+--- a/examples/esp-radar/console_test/main/app_main.c
++++ b/examples/esp-radar/console_test/main/app_main.c
+@@ -349,7 +349,9 @@ static void csi_data_print_task(void *arg)
+             len += sprintf(buffer + len, "type,sequence,timestamp,taget_seq,target,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,not_sounding,aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,channel,secondary_channel,local_timestamp,ant,sig_len,rx_state,agc_gain,fft_gain,len,first_word,data\n");
+         }
+         uint16_t valid_len = info->valid_len;
+-        ESP_LOGI(TAG, "info->valid_len1: %d", info->valid_len);
++        // Per-frame logging interleaves with the CSV payload on the same UART
++        // and corrupts CSI_DATA lines before the desktop parser can decode them.
++        ESP_LOGD(TAG, "info->valid_len1: %d", info->valid_len);
+         if (!strcasecmp(g_console_input_config.csi_output_type, "LLTF")) {
+             info->valid_len = info->valid_lltf_len;
+         } else if (!strcasecmp(g_console_input_config.csi_output_type, "HT-LTF")) {
+@@ -618,10 +620,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
+ #endif
+     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+         g_wifi_connect_status = false;
+-        ESP_LOGW(TAG, "Wi-Fi disconnected");
+-        esp_radar_config_t radar_config;
+-        esp_radar_get_config(&radar_config);
+-        esp_radar_wifi_reinit(&radar_config.wifi_config);
++        wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)event_data;
++        ESP_LOGW(TAG, "Wi-Fi disconnected (reason=%d)", event->reason);
+ 
+     }
+ }
+@@ -714,6 +714,14 @@ void app_main(void)
+ #endif
+     dec_config.outliers_threshold = 0;
+     ESP_ERROR_CHECK(esp_radar_wifi_init(&wifi_config));
++    const wifi_country_t jp_country = {
++        .cc = "JP",
++        .schan = 1,
++        .nchan = 14,
++        .max_tx_power = 20,
++        .policy = WIFI_COUNTRY_POLICY_MANUAL,
++    };
++    ESP_ERROR_CHECK(esp_wifi_set_country(&jp_country));
+     ESP_ERROR_CHECK(esp_radar_csi_init(&csi_config));
+     ESP_ERROR_CHECK(esp_radar_dec_init(&dec_config));
+ 
+diff --git a/examples/esp-radar/console_test/tools/esp_csi_tool.py b/examples/esp-radar/console_test/tools/esp_csi_tool.py
+index 9afa171..0d74fb8 100755
+--- a/examples/esp-radar/console_test/tools/esp_csi_tool.py
++++ b/examples/esp-radar/console_test/tools/esp_csi_tool.py
+@@ -126,6 +126,16 @@ g_evaluate_statistics_array = np.zeros(
+ g_display_raw_data = False
+ g_display_radar_model = False
+ g_display_eigenvalues_table = False
++g_last_csi_warning_time = 0.0
++
++
++def csi_warning(message):
++    """Keep noisy 2 Mbps UART corruption from flooding the console."""
++    global g_last_csi_warning_time
++    now = time.monotonic()
++    if now - g_last_csi_warning_time >= 5.0:
++        print(message)
++        g_last_csi_warning_time = now
+ 
+ def base64_decode_bin(str_data):
+     try:
+@@ -161,7 +171,7 @@ def base64_decode_bin(str_data):
+ 
+         bin_data = base64.b64decode(str_data, validate=True)
+     except Exception as e:
+-        print(f'Exception: {e}, data: {str_data[:100]}')
++        csi_warning(f'CSI_DATA base64 decode error: {e}')
+         # 解码失败时返回空列表，避免后续错误
+         return []
+ 
+@@ -418,7 +428,9 @@ class DataGraphicalWindow(QMainWindow, Ui_MainWindow):
+ 
+         self.timer_boot_command = QTimer()
+         self.timer_boot_command.timeout.connect(self.command_boot)
+-        self.timer_boot_command.setInterval(3000)
++        # This ESP32 finishes rebooting after roughly 4.5 seconds. Commands
++        # sent at the former 3-second mark could be lost during startup.
++        self.timer_boot_command.setInterval(6000)
+         self.timer_boot_command.start()
+ 
+         self.timer_curve_subcarrier = QTimer()
+@@ -732,7 +744,9 @@ class DataGraphicalWindow(QMainWindow, Ui_MainWindow):
+         command = f'radar --csi_output_type {self.csi_output_type} --csi_output_format base64'
+         self.serial_queue_write.put(command)
+ 
+-        if self.checkBox_router_auto_connect.isChecked() and len(self.lineEdit_router_ssid.text()) > 0:
++        if (self.checkBox_router_auto_connect.isChecked()
++                and len(self.lineEdit_router_ssid.text()) > 0
++                and len(self.lineEdit_router_password.text()) >= 8):
+             self.command_router_connect()
+ 
+         self.timer_boot_command.stop()
+@@ -750,9 +764,18 @@ class DataGraphicalWindow(QMainWindow, Ui_MainWindow):
+             self.pushButton_router_connect.setText('disconnect')
+             self.pushButton_router_connect.setStyleSheet('color: red')
+ 
+-            command = 'wifi_config --ssid ' + ("\"%s\"" % self.lineEdit_router_ssid.text())
++            # The ESP console parses whitespace unless string arguments are quoted.
++            # Quote both fields so SSIDs/passwords containing spaces are sent intact.
++            def quote_console_arg(value):
++                return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
++
++            command = 'wifi_config --ssid ' + quote_console_arg(self.lineEdit_router_ssid.text())
+             if len(self.lineEdit_router_password.text()) >= 8:
+-                command += ' --password ' + self.lineEdit_router_password.text()
++                command += ' --password ' + quote_console_arg(self.lineEdit_router_password.text())
++            # Keep the country and station update atomic. Sending a country-only
++            # command first makes the firmware re-apply an existing STA config
++            # while it is reconnecting and can trigger ESP_ERR_WIFI_STATE.
++            command += ' --country_code JP'
+             self.serial_queue_write.put(command)
+         else:
+             self.pushButton_router_connect.setText('connect')
+@@ -768,7 +791,8 @@ class DataGraphicalWindow(QMainWindow, Ui_MainWindow):
+         with open('./config/gui_config.json', 'r') as file:
+             gui_config = json.load(file)
+             gui_config['router_ssid'] = self.lineEdit_router_ssid.text()
+-            gui_config['router_password'] = self.lineEdit_router_password.text()
++            # Never persist a Wi-Fi password in plaintext on the PC.
++            gui_config['router_password'] = ''
+         with open('./config/gui_config.json', 'w') as file:
+             json.dump(gui_config, file)
+ 
+@@ -1068,32 +1092,37 @@ class DataHandleThread(QThread):
+         while True:
+             # print(f"g_display_raw_data: {g_display_raw_data}")
+             series = self.serial_queue_read.get()
+-            if series['type'] == 'DEVICE_INFO' and g_display_raw_data:
+-                g_device_info_series = series.copy()
+-                self.signal_device_info.emit(series)
+-            elif series['type'] == 'CSI_DATA' and g_display_raw_data:
+-                csi_data_handle(self, series)
+-            elif series['type'] == 'RADAR_DADA' and g_display_radar_model:
+-                radar_data_handle(self, series)
+-            elif series['type'] == 'LOG_DATA' and g_display_raw_data:
+-                if series['tag'] == 'I':
+-                    color = 'green'
+-                elif series['tag'] == 'W':
+-                    color = 'yellow'
+-                elif series['tag'] == 'E':
+-                    color = 'red'
+-                else:
+-                    color = 'white'
+-
+-                data = "<font color=\'%s\'>%s (%s) %s <font>" % (
+-                    color, series['tag'], series['timestamp'], series['data'])
+-                self.signal_log_msg.emit(data)
+-            elif series['type'] == 'FAIL_EVENT':
+-                print(f"Failed: {series['data']}")
+-
+-                self.signal_exit.emit()
+-                time.sleep(1)
+-                sys.exit(0)
++            try:
++                if series['type'] == 'DEVICE_INFO' and g_display_raw_data:
++                    g_device_info_series = series.copy()
++                    self.signal_device_info.emit(series)
++                elif series['type'] == 'CSI_DATA' and g_display_raw_data:
++                    csi_data_handle(self, series)
++                elif series['type'] == 'RADAR_DADA' and g_display_radar_model:
++                    radar_data_handle(self, series)
++                elif series['type'] == 'LOG_DATA' and g_display_raw_data:
++                    if series['tag'] == 'I':
++                        color = 'green'
++                    elif series['tag'] == 'W':
++                        color = 'yellow'
++                    elif series['tag'] == 'E':
++                        color = 'red'
++                    else:
++                        color = 'white'
++
++                    data = "<font color=\'%s\'>%s (%s) %s <font>" % (
++                        color, series['tag'], series['timestamp'], series['data'])
++                    self.signal_log_msg.emit(data)
++                elif series['type'] == 'FAIL_EVENT':
++                    print(f"Failed: {series['data']}")
++                    self.signal_exit.emit()
++                    time.sleep(1)
++                    return
++            except (KeyError, TypeError, ValueError) as error:
++                # UART output can occasionally splice two lines at 2 Mbps.
++                # A malformed sample must not terminate the display consumer,
++                # otherwise the multiprocessing queue fills and capture stops.
++                print(f"Skipping malformed {series.get('type', 'unknown')} row: {error}")
+             else:
+                 # print("error: ", series)
+                 pass
+@@ -1127,19 +1156,22 @@ def serial_handle(queue_read, queue_write, port):
+                                          ['RADAR_DADA', RADAR_DATA_COLUMNS_NAMES, 'log/radar_data.csv', None, None],
+                                          ['DEVICE_INFO', DEVICE_INFO_COLUMNS_NAMES, 'log/device_info.csv', None, None]])
+ 
+-    for data_valid in data_valid_list.iloc:
+-        # print(type(data_valid), data_valid)
+-        # print(f"file_name: {data_valid['file_name']}")
+-        data_valid['file_fd'] = open(data_valid['file_name'], 'w')
+-        data_valid['file_writer'] = csv.writer(data_valid['file_fd'])
+-        data_valid['file_writer'].writerow(data_valid['columns_names'])
++    for row_index in data_valid_list.index:
++        # Modern pandas returns a copy for row iteration, so assigning through
++        # the row Series leaves file_writer as None. Store handles explicitly.
++        file_fd = open(data_valid_list.at[row_index, 'file_name'], 'w', newline='')
++        file_writer = csv.writer(file_fd)
++        file_writer.writerow(data_valid_list.at[row_index, 'columns_names'])
++        data_valid_list.at[row_index, 'file_fd'] = file_fd
++        data_valid_list.at[row_index, 'file_writer'] = file_writer
+ 
+     log_data_writer = open('log/log_data.txt', 'w+')
+     taget_last = 'unknown'
+     taget_seq_last = 0
+ 
+-    set.write('restart\r\n'.encode('utf-8'))
+-    time.sleep(0.01)
++    # Opening the viewer must not reboot the ESP32: a reboot drops the active
++    # hotspot association before the password-free GUI can start CSI capture.
++    time.sleep(0.2)
+ 
+     while True:
+         if not queue_write.empty():
+@@ -1186,6 +1218,19 @@ def serial_handle(queue_read, queue_write, port):
+                 except StopIteration:
+                     continue
+ 
++                # On the classic ESP32, concurrent UART output can omit up to
++                # three nonessential radio metadata fields between noise_floor
++                # and local_timestamp.  The CSI payload and both stable ends of
++                # the row remain intact, so pad only that metadata gap instead
++                # of discarding otherwise valid measurements.
++                if (data and data[0] == 'CSI_DATA'
++                        and 27 <= len(data) < len(CSI_DATA_COLUMNS_NAMES)):
++                    stable_prefix = data[:18]
++                    optional_radio_metadata = data[18:-9]
++                    stable_suffix = data[-9:]
++                    optional_radio_metadata += ['0'] * (3 - len(optional_radio_metadata))
++                    data = stable_prefix + optional_radio_metadata + stable_suffix
++
+                 if len(data) == len(data_valid['columns_names']):
+                     # 清理 base64 数据字段（最后一个字段），移除可能的日志信息
+                     if data_valid['type'] == 'CSI_DATA' and len(data) > 0:
+@@ -1208,8 +1253,24 @@ def serial_handle(queue_read, queue_write, port):
+                         if min_log_start < len(data_field) and min_log_start > 10:
+                             data[-1] = data_field[:min_log_start]
+ 
++                    # Keep mixed scalar/list values writable on current pandas.
++                    # Without dtype=object, the CSV strings create a StringDtype
++                    # Series and assigning the decoded CSI byte array crashes the
++                    # serial worker process.
+                     data_series = pd.Series(
+-                        data, index=data_valid['columns_names'])
++                        data, index=data_valid['columns_names'], dtype=object)
++
++                    # A damaged UART row can shift the CSI columns while still
++                    # having the expected field count.  Never use an untrusted
++                    # value as a Windows folder name; invalid collection labels
++                    # are ordinary live samples, not fatal errors.
++                    if data_series['type'] == 'CSI_DATA':
++                        target = str(data_series['taget']).strip()
++                        if target not in CSI_DATA_TARGETS:
++                            print(
++                                f"CSI_DATA invalid target ignored: {target[:32]!r}")
++                            data_series['taget'] = 'unknown'
++                            data_series['taget_seq'] = 0
+ 
+                     try:
+                         datetime.strptime(
+@@ -1227,16 +1288,15 @@ def serial_handle(queue_read, queue_write, port):
+                                 data_series['data'])
+                             # 如果解码失败返回空列表，跳过这条数据
+                             if len(csi_raw_data) == 0:
+-                                print(f"CSI_DATA decode failed, skipping data: {data_series['data'][:50]}...")
++                                csi_warning("CSI_DATA decode failed; damaged UART sample skipped")
+                                 break
+                             if len(csi_raw_data) != int(data_series['len']):
+                                 # if len(csi_raw_data) != 104 and len(csi_raw_data) != 216 and len(csi_raw_data) != 328 and len(csi_raw_data) != 552:
+-                                print(
+-                                    f"CSI_DATA, expected: {data_series['len']}, actual: {len(csi_raw_data)}")
++                                csi_warning(
++                                    f"CSI_DATA length mismatch: expected {data_series['len']}, actual {len(csi_raw_data)}")
+                                 break
+                         except Exception as e:
+-                            print(
+-                                f"json.JSONDecodeError: {e}, data: {data_series['data']}")
++                            csi_warning(f"CSI_DATA parse error: {e}")
+                             break
+ 
+                         data_series['data'] = csi_raw_data
+@@ -1268,7 +1328,8 @@ def serial_handle(queue_read, queue_write, port):
+                             # print("data_series", len(data_series), type(data_series), data_series)
+                             queue_read.put(data_series)
+                     else:
+-                        queue_read.put(data_series)
++                        if not queue_read.full():
++                            queue_read.put(data_series)
+ 
+                     data_valid['file_writer'].writerow(data_series.astype(str))
+                     data_valid['file_fd'].flush()
+diff --git a/examples/esp-radar/console_test/tools/esp_csi_tool_gui.py b/examples/esp-radar/console_test/tools/esp_csi_tool_gui.py
+index 9941c21..bdde90a 100644
+--- a/examples/esp-radar/console_test/tools/esp_csi_tool_gui.py
++++ b/examples/esp-radar/console_test/tools/esp_csi_tool_gui.py
+@@ -117,6 +117,7 @@ class Ui_MainWindow(object):
+         self.label_duration_2.setObjectName("label_duration_2")
+         self.horizontalLayout_13.addWidget(self.label_duration_2)
+         self.lineEdit_router_password = QtWidgets.QLineEdit(self.groupBox_11)
++        self.lineEdit_router_password.setEchoMode(QtWidgets.QLineEdit.Password)
+         self.lineEdit_router_password.setObjectName("lineEdit_router_password")
+         self.horizontalLayout_13.addWidget(self.lineEdit_router_password)
+         self.checkBox_router_auto_connect = QtWidgets.QCheckBox(self.groupBox_11)
+diff --git a/examples/esp-radar/console_test/tools/esp_csi_tool_gui.ui b/examples/esp-radar/console_test/tools/esp_csi_tool_gui.ui
+index 1f1162c..062f33e 100644
+--- a/examples/esp-radar/console_test/tools/esp_csi_tool_gui.ui
++++ b/examples/esp-radar/console_test/tools/esp_csi_tool_gui.ui
+@@ -229,7 +229,11 @@
+                 </widget>
+                </item>
+                <item>
+-                <widget class="QLineEdit" name="lineEdit_router_password"/>
++                <widget class="QLineEdit" name="lineEdit_router_password">
++                 <property name="echoMode">
++                  <enum>QLineEdit::Password</enum>
++                 </property>
++                </widget>
+                </item>
+                <item>
+                 <widget class="QCheckBox" name="checkBox_router_auto_connect">
+
