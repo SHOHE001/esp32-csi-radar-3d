@@ -78,6 +78,7 @@ test("a stalled request expires the previous LIVE state and polling recovers", a
   assert.equal(app.elements.get("liveText").textContent, "WAITING");
   assert.equal(app.elements.get("activityValue").textContent, "サーバー切断");
   assert.equal(app.elements.get("motionValue").textContent, 0);
+  assert.equal(app.elements.get("rssiValue").textContent, "-- dBm");
   runTimer(app, 120);
   await flush();
   assert.equal(app.elements.get("liveText").textContent, "LIVE");
@@ -91,6 +92,21 @@ test("completed requests cancel their deadline and schedule one next poll", asyn
 
 test("HTTP failures are displayed as disconnected and polling continues", async () => {
   const app = viewer(async () => ({ ok: false, status: 503 }));
+  await flush();
+  assert.equal(app.elements.get("liveText").textContent, "WAITING");
+  assert.deepEqual([...app.timers.values()].map((timer) => timer.delay), [120]);
+});
+
+
+test("the polling deadline also covers a stalled response body", async () => {
+  const app = viewer(async (_url, options) => ({
+    ok: true,
+    json: () => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(new Error("body timed out")), { once: true });
+    }),
+  }));
+  await flush();
+  runTimer(app, 2500);
   await flush();
   assert.equal(app.elements.get("liveText").textContent, "WAITING");
   assert.deepEqual([...app.timers.values()].map((timer) => timer.delay), [120]);

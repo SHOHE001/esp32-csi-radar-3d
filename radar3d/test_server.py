@@ -1,10 +1,13 @@
 import csv
+import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from urllib.request import urlopen
 
-from server import RadarEstimator, read_latest_csv
+from server import Radar3DServer, RadarEstimator, read_latest_csv
 
 
 RADAR_FIELDS = [
@@ -102,6 +105,34 @@ class RadarEstimatorTests(unittest.TestCase):
         self.assertFalse(result["live"])
         self.assertEqual(result["ageSeconds"], 100.0)
         self.assertEqual(result["rssi"], -40)
+
+    def test_http_state_survives_nonfinite_and_partial_input(self):
+        path = self.write_rows("radar_data.csv", RADAR_FIELDS, [{
+            "type": "RADAR_DADA", "seq": "7", "move_status": "inf",
+            "someone_status": "nan", "waveform_jitter": "-inf",
+        }])
+        with path.open("a", encoding="utf-8", newline="") as handle:
+            handle.write('RADAR_DADA,"8\nRADAR_DADA,9')
+        os.utime(path, (999.0, 999.0))
+        self.write_rows("csi_data.csv", CSI_FIELDS, [{
+            "type": "CSI_DATA", "rssi": "-40",
+        }], mtime=900.0)
+        server = Radar3DServer(("127.0.0.1", 0), RadarEstimator(self.log_dir, now_fn=lambda: 1000.0))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with urlopen(f"http://127.0.0.1:{server.server_port}/api/state", timeout=2) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                result = json.loads(response.read(), parse_constant=lambda value: self.fail(f"Nonfinite JSON: {value}"))
+            self.assertTrue(result["live"])
+            self.assertEqual(result["seq"], 7)
+            self.assertFalse(result["move"])
+            self.assertIsNone(result["rssi"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_live_motion_produces_bounded_estimated_track(self):
         self.write_rows("radar_data.csv", RADAR_FIELDS, [{

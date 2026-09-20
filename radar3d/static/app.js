@@ -295,13 +295,16 @@
   }
 
   async function poll() {
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), 2500);
     try {
-      const response = await fetch(`/api/state?t=${Date.now()}`, { cache: "no-store" });
+      const response = await fetch(`/api/state?t=${Date.now()}`, { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       updateUI(await response.json());
     } catch (error) {
-      updateUI({ ...state, live: false, presence: false, move: false, activity: "サーバー切断", motion: 0, confidence: 0 });
+      updateUI({ ...state, live: false, presence: false, move: false, activity: "サーバー切断", motion: 0, confidence: 0, rssi: null, signalQuality: 0, ageSeconds: null });
     } finally {
+      window.clearTimeout(deadline);
       window.setTimeout(poll, 120);
     }
   }

@@ -41,29 +41,36 @@ def _float(value: Any, default: float = 0.0) -> float:
 def _int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def read_latest_csv(path: Path) -> tuple[dict[str, str] | None, float | None]:
     """Read the last complete CSV record while another process is appending."""
     try:
-        stat = path.stat()
         with path.open("rb") as handle:
+            stat = os.fstat(handle.fileno())
             header_bytes = handle.readline()
-            header = next(csv.reader([header_bytes.decode("utf-8-sig", errors="replace")]))
+            if not header_bytes.endswith(b"\n"):
+                return None, None
+            header = next(csv.reader([header_bytes.decode("utf-8-sig", errors="replace")], strict=True))
             data_start = handle.tell()
             tail_start = max(data_start, stat.st_size - 262_144)
             handle.seek(tail_start)
-            chunk = handle.read().decode("utf-8", errors="replace")
-        lines = chunk.splitlines()
+            chunk = handle.read(max(0, stat.st_size - tail_start)).decode("utf-8", errors="replace")
+        # A newline commits each physical log record. Ignore a writer's partial
+        # last record even when it already contains the expected column count.
+        lines = chunk.split("\n")[:-1]
         if tail_start > data_start and lines:
             lines = lines[1:]
         for line in reversed(lines):
-            values = next(csv.reader([line]))
+            try:
+                values = next(csv.reader([line], strict=True))
+            except csv.Error:
+                continue
             if len(values) == len(header) and values and values[0]:
                 return dict(zip(header, values)), stat.st_mtime
-    except (FileNotFoundError, OSError, csv.Error):
+    except (OSError, csv.Error):
         pass
     return None, None
 
@@ -99,12 +106,9 @@ class RadarEstimator:
         radar, radar_mtime = read_latest_csv(self.radar_path)
         csi, csi_mtime = read_latest_csv(self.csi_path)
 
-        newest_mtime = max(
-            [value for value in (radar_mtime, csi_mtime) if value is not None],
-            default=0.0,
-        )
-        age_seconds = max(0.0, now - newest_mtime) if newest_mtime else None
-        live = bool(radar and radar_mtime and now - radar_mtime <= 3.0)
+        age_seconds = max(0.0, now - radar_mtime) if radar_mtime is not None else None
+        live = bool(radar and radar_mtime is not None and now - radar_mtime <= 3.0)
+        csi_live = bool(csi and csi_mtime is not None and now - csi_mtime <= 3.0)
 
         seq = _int(radar.get("seq")) if radar else None
         jitter = _float(radar.get("waveform_jitter")) if radar else 0.0
@@ -144,7 +148,7 @@ class RadarEstimator:
             self.track.previous_jitter = jitter
             self.track.last_seq = seq
 
-        rssi = _int(csi.get("rssi"), -100) if csi else None
+        rssi = _int(csi.get("rssi"), -100) if csi_live else None
         signal_quality = 0
         if rssi is not None:
             signal_quality = round(max(0.0, min(100.0, (rssi + 100) * 2.0)))
