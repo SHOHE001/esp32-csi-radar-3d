@@ -44,7 +44,9 @@ Wi-Fiパスワードはソースコードへ埋め込んでいません。USBシ
 
 - 緑色の信号値・動体判定: ESP32からの実測値
 - 人物のX/Z位置・手足の姿勢: 単一ノードの値から生成する推定アニメーション
-- データが3秒以上止まった場合: `WAITING` へ切り替わり、古い値をライブ表示しません
+- radar データが3秒を超えて止まった場合: `WAITING` へ切り替わります。RSSI は CSI ファイルの更新時刻で独立に期限を判定し、古い値は表示しません。
+- CSV の追記中は改行まで書かれた正常な行だけを読み込みます。途中の行や壊れた行は直前の正常な行へ戻り、非有限数値は安全な既定値を使います。
+- ブラウザーの取得処理は2.5秒で打ち切り、`サーバー切断` を表示して再取得します。画面のデータ経過時間は radar ファイルの更新時刻が基準です。
 
 起動コマンド:
 
@@ -94,3 +96,5 @@ Wi-Fiパスワードはソースコードへ埋め込んでいません。USBシ
 
 - Espressif ESP-CSI: https://github.com/espressif/esp-csi
 - ESP-CSI console_test: https://github.com/espressif/esp-csi/tree/master/examples/esp-radar/console_test
+
+開発手順・合成データによる検証方法は [docs/development-workflow.md](docs/development-workflow.md) を参照してください。

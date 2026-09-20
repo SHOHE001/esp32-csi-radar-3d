@@ -17,3 +17,10 @@ tools/
 # Local editor/OS files
 .DS_Store
 Thumbs.db
+
+# Local secrets; committed examples remain available.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
